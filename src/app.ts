@@ -3,6 +3,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import morgan from 'morgan';
+import cookieParser from 'cookie-parser';
 import { config } from './config/env';
 import { logger } from './utils/logger';
 import { requestId } from './middleware/auth.middleware';
@@ -12,60 +13,55 @@ import { sendError } from './utils/response';
 
 const app = express();
 
-// ─────────────────────────────────────────
-// Security headers
-// ─────────────────────────────────────────
+// ─── Security headers ──────────────────────────────────────
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
-      scriptSrc: ["'self'"],
-      styleSrc: ["'self'"],
-      imgSrc: ["'self'", 'data:'],
+      scriptSrc:  ["'self'"],
+      styleSrc:   ["'self'"],
+      imgSrc:     ["'self'", 'data:'],
     },
   },
-  hsts: { maxAge: 31536000, includeSubDomains: true },
-  noSniff: true,
+  hsts: config.COOKIE_SECURE
+    ? { maxAge: 31536000, includeSubDomains: true }
+    : false, // only enforce HSTS in prod (requires HTTPS)
+  noSniff:    true,
   frameguard: { action: 'deny' },
-  xssFilter: true,
 }));
 
-// ─────────────────────────────────────────
-// CORS
-// ─────────────────────────────────────────
+// ─── CORS ──────────────────────────────────────────────────
 app.use(cors({
   origin: config.CORS_ORIGIN,
-  credentials: true,
+  credentials: true, // required for cookies
   methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-ID'],
   exposedHeaders: ['X-Request-ID'],
 }));
 
-// ─────────────────────────────────────────
-// Global rate limit
-// ─────────────────────────────────────────
+// ─── Global rate limit ─────────────────────────────────────
 app.use(rateLimit({
   windowMs: config.RATE_LIMIT_WINDOW_MS,
   max: config.RATE_LIMIT_MAX,
   standardHeaders: true,
   legacyHeaders: false,
-  message: { success: false, message: 'Muitas requisições. Tente novamente mais tarde.' },
+  validate: { xForwardedForHeader: false, trustProxy: false },
+  message: { success: false, message: 'Muitas requisições. Tente novamente em breve.' },
 }));
 
-// ─────────────────────────────────────────
-// Request parsing & logging
-// ─────────────────────────────────────────
+// ─── Parsing ───────────────────────────────────────────────
 app.use(express.json({ limit: '10kb' }));
 app.use(express.urlencoded({ extended: true }));
+app.use(cookieParser(config.COOKIE_SECRET)); // enables req.cookies
 app.use(requestId);
+
+// ─── Logging ───────────────────────────────────────────────
 app.use(morgan('combined', {
   stream: { write: (msg: string) => logger.info(msg.trim()) },
   skip: (req: Request) => req.url === '/health',
 }));
 
-// ─────────────────────────────────────────
-// Health check (no auth required)
-// ─────────────────────────────────────────
+// ─── Health ────────────────────────────────────────────────
 app.get('/health', (_req: Request, res: Response) => {
   res.json({
     status: 'ok',
@@ -76,18 +72,14 @@ app.get('/health', (_req: Request, res: Response) => {
   });
 });
 
-// ─────────────────────────────────────────
-// Routes
-// ─────────────────────────────────────────
+// ─── Routes ────────────────────────────────────────────────
 app.use('/api/auth', authRoutes);
-app.use('/api', apiRoutes);
+app.use('/api',      apiRoutes);
 
-// 404
-app.use((_req: Request, res: Response) => {
-  sendError(res, 404, 'Rota não encontrada');
-});
+// ─── 404 ───────────────────────────────────────────────────
+app.use((_req: Request, res: Response) => sendError(res, 404, 'Rota não encontrada'));
 
-// Global error handler
+// ─── Global error handler ──────────────────────────────────
 app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
   logger.error('Unhandled error', { message: err.message, stack: err.stack });
   sendError(res, 500, 'Erro interno do servidor');

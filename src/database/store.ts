@@ -1,185 +1,127 @@
 import bcrypt from 'bcryptjs';
 import { v4 as uuidv4 } from 'uuid';
 import { User, Session, AuditEntry, Incident, PixAnomaly } from '../domain/types';
+import { Collection, KVStore } from './file-db';
+import { logger } from '../utils/logger';
 
-// ─────────────────────────────────────────
-// In-memory store (replace with PostgreSQL in production)
-// ─────────────────────────────────────────
+// ─── Persistent collections ──────────────────────────────────
+export const users        = new Collection<User>('users');
+export const sessions     = new Collection<Session>('sessions');
+export const auditLog     = new Collection<AuditEntry>('audit');
+export const incidents    = new Collection<Incident>('incidents');
+export const pixAnomalies = new Collection<PixAnomaly>('pix-anomalies');
+export const usedTokens   = new KVStore('used-tokens'); // refresh token reuse guard
 
-class Database {
-  users: Map<string, User> = new Map();
-  sessions: Map<string, Session> = new Map();
-  auditLog: AuditEntry[] = [];
-  incidents: Map<string, Incident> = new Map();
-  pixAnomalies: Map<string, PixAnomaly> = new Map();
-  usedRefreshTokens: Set<string> = new Set(); // Prevent token reuse
+// ─── Backwards-compatible db facade (keeps service layer unchanged) ──
+export const db = {
+  // Users
+  users: { // Map-like API
+    set: (id: string, u: User) => users.upsert(u),
+    get: (id: string) => users.findById(id),
+    values: () => users.findAll(),
+  },
+  // Sessions
+  sessions: {
+    set: (id: string, s: Session) => sessions.upsert(s),
+    get: (id: string) => sessions.findById(id),
+    values: () => sessions.findAll(),
+    forEach: (cb: (s: Session, id: string) => void) =>
+      sessions.findAll().forEach(s => cb(s, s.id)),
+  },
+  // Audit log (append-only array interface)
+  auditLog: {
+    get length() { return auditLog.count(); },
+    push: (e: AuditEntry) => auditLog.appendOne(e),
+    [Symbol.iterator]: function*() { yield* auditLog.findAll(); },
+  },
+  // Incidents
+  incidents: {
+    set: (id: string, i: Incident) => incidents.upsert(i),
+    get: (id: string) => incidents.findById(id),
+    values: () => incidents.findAll(),
+    forEach: (cb: (i: Incident, id: string) => void) =>
+      incidents.findAll().forEach(i => cb(i, i.id)),
+  },
+  // PIX anomalies
+  pixAnomalies: {
+    set: (id: string, a: PixAnomaly) => pixAnomalies.upsert(a),
+    values: () => pixAnomalies.findAll(),
+  },
+  // Used refresh tokens (prevent reuse)
+  usedRefreshTokens: {
+    add: (token: string) => usedTokens.set(token, true),
+    has: (token: string) => usedTokens.has(token),
+  },
 
-  async seed() {
-    // Hash passwords with bcrypt cost factor 12
-    const adminHash = await bcrypt.hash('Admin@2024!Secure', 12);
-    const analystHash = await bcrypt.hash('Analista@2024!Secure', 12);
-    const directorHash = await bcrypt.hash('Diretor@2024!Secure', 12);
-    const auditorHash = await bcrypt.hash('Auditor@2024!Secure', 12);
+  // ── Query helpers ──
+  findUserByEmail: (email: string): User | undefined =>
+    users.findOne(u => u.email === email),
 
-    const seedUsers: User[] = [
-      {
-        id: uuidv4(),
-        name: 'Roberto Silva',
-        email: 'roberto.silva@pixcompliance.com',
-        passwordHash: adminHash,
-        role: 'Admin',
-        mfaEnabled: true,
-        mfaSecret: 'JBSWY3DPEHPK3PXP', // Base32 secret for demo TOTP
-        mfaVerified: true,
-        active: true,
-        loginAttempts: 0,
-        createdAt: new Date('2024-01-01'),
-        updatedAt: new Date('2024-01-01'),
-      },
-      {
-        id: uuidv4(),
-        name: 'Ana Rodriguez',
-        email: 'ana.rodriguez@pixcompliance.com',
-        passwordHash: analystHash,
-        role: 'Analista',
-        mfaEnabled: true,
-        mfaSecret: 'JBSWY3DPEHPK3PXQ',
-        mfaVerified: true,
-        active: true,
-        loginAttempts: 0,
-        createdAt: new Date('2024-01-02'),
-        updatedAt: new Date('2024-01-02'),
-      },
-      {
-        id: uuidv4(),
-        name: 'Carlos Santos',
-        email: 'carlos.santos@pixcompliance.com',
-        passwordHash: directorHash,
-        role: 'Diretor',
-        mfaEnabled: true,
-        mfaSecret: 'JBSWY3DPEHPK3PXR',
-        mfaVerified: true,
-        active: true,
-        loginAttempts: 0,
-        createdAt: new Date('2024-01-03'),
-        updatedAt: new Date('2024-01-03'),
-      },
-      {
-        id: uuidv4(),
-        name: 'Márcia Lima',
-        email: 'marcia.lima@pixcompliance.com',
-        passwordHash: auditorHash,
-        role: 'Auditor',
-        mfaEnabled: true,
-        mfaSecret: 'JBSWY3DPEHPK3PXS',
-        mfaVerified: true,
-        active: true,
-        loginAttempts: 0,
-        createdAt: new Date('2024-01-04'),
-        updatedAt: new Date('2024-01-04'),
-      },
-    ];
+  findUserById: (id: string): User | undefined =>
+    users.findById(id),
 
-    seedUsers.forEach(u => this.users.set(u.id, u));
+  findSessionByRefreshToken: (token: string): Session | undefined =>
+    sessions.findOne(s => s.refreshToken === token),
 
-    // Seed incidents
-    const incidentList: Incident[] = [
-      {
-        id: uuidv4(),
-        title: 'Tentativa de Breach em Blockchain',
-        description: 'Atividade suspeita detectada na camada Hyperledger Fabric',
-        severity: 'critical',
-        status: 'investigating',
-        assignee: 'SOC Team Alpha',
-        createdAt: new Date(Date.now() - 23 * 60000),
-        updatedAt: new Date(Date.now() - 5 * 60000),
-        slaDeadline: new Date(Date.now() + 2 * 3600000),
-        tags: ['blockchain', 'breach', 'critical'],
-      },
-      {
-        id: uuidv4(),
-        title: 'Anomalia em Transações PIX',
-        description: 'Volume 340% acima da média detectado nas últimas 2h',
-        severity: 'high',
-        status: 'open',
-        assignee: 'PIX Security Team',
-        createdAt: new Date(Date.now() - 60 * 60000),
-        updatedAt: new Date(Date.now() - 10 * 60000),
-        slaDeadline: new Date(Date.now() + 6 * 3600000),
-        tags: ['pix', 'anomaly', 'volume'],
-      },
-      {
-        id: uuidv4(),
-        title: 'Falha em HSM - Nível 3',
-        description: 'Hardware Security Module reportando erro de autenticação',
-        severity: 'high',
-        status: 'contained',
-        assignee: 'Crypto Team',
-        createdAt: new Date(Date.now() - 120 * 60000),
-        updatedAt: new Date(Date.now() - 30 * 60000),
-        slaDeadline: new Date(Date.now() + 4 * 3600000),
-        tags: ['hsm', 'crypto', 'hardware'],
-      },
-    ];
+  revokeSessionsByUserId: (userId: string): void => {
+    sessions.updateMany(s => s.userId === userId, { revoked: true } as Partial<Session>);
+  },
 
-    incidentList.forEach(i => this.incidents.set(i.id, i));
+  revokeSessionsByFamily: (tokenFamily: string): void => {
+    sessions.updateMany(s => s.tokenFamily === tokenFamily, { revoked: true } as Partial<Session>);
+  },
 
-    // Seed anomalies
-    const anomaliesList: PixAnomaly[] = [
-      {
-        id: uuidv4(),
-        detectedAt: new Date(Date.now() - 5 * 60000),
-        type: 'volume_spike',
-        severity: 'high',
-        description: 'Pico de 340% nas transações PIX nas últimas 2h',
-        affectedTransactions: 12847,
-        status: 'investigating',
-      },
-      {
-        id: uuidv4(),
-        detectedAt: new Date(Date.now() - 45 * 60000),
-        type: 'geographic',
-        severity: 'medium',
-        description: 'Concentração anômala de transações na região Sul',
-        affectedTransactions: 3421,
-        status: 'open',
-      },
-    ];
+  saveSession: (session: Session): void => {
+    sessions.upsert(session);
+  },
+};
 
-    anomaliesList.forEach(a => this.pixAnomalies.set(a.id, a));
+// ─── Seed (runs only if collections are empty) ───────────────
+export async function seedIfEmpty() {
+  if (users.count() > 0) {
+    logger.info(`Database loaded from disk (${users.count()} users, ${auditLog.count()} audit entries, ${incidents.count()} incidents)`);
+    return;
   }
 
-  findUserByEmail(email: string): User | undefined {
-    return [...this.users.values()].find(u => u.email === email);
-  }
+  logger.info('Seeding database with demo users...');
 
-  findUserById(id: string): User | undefined {
-    return this.users.get(id);
-  }
+  const seeds = [
+    { name: 'Roberto Silva',  email: 'roberto.silva@pixcompliance.com',  role: 'Admin'       as const, pw: 'Admin@2024!Secure',    secret: 'JBSWY3DPEHPK3PXP' },
+    { name: 'Ana Rodriguez',  email: 'ana.rodriguez@pixcompliance.com',   role: 'Analista'    as const, pw: 'Analista@2024!Secure', secret: 'JBSWY3DPEHPK3PXQ' },
+    { name: 'Carlos Santos',  email: 'carlos.santos@pixcompliance.com',   role: 'Diretor'     as const, pw: 'Diretor@2024!Secure',  secret: 'JBSWY3DPEHPK3PXR' },
+    { name: 'Márcia Lima',    email: 'marcia.lima@pixcompliance.com',     role: 'Auditor'     as const, pw: 'Auditor@2024!Secure',  secret: 'JBSWY3DPEHPK3PXS' },
+  ];
 
-  saveSession(session: Session): void {
-    this.sessions.set(session.id, session);
-  }
-
-  findSessionByRefreshToken(token: string): Session | undefined {
-    return [...this.sessions.values()].find(s => s.refreshToken === token);
-  }
-
-  revokeSessionsByUserId(userId: string): void {
-    this.sessions.forEach((s, id) => {
-      if (s.userId === userId) {
-        this.sessions.set(id, { ...s, revoked: true });
-      }
+  for (const s of seeds) {
+    const hash = await bcrypt.hash(s.pw, 12);
+    users.insert({
+      id: uuidv4(), name: s.name, email: s.email,
+      passwordHash: hash, role: s.role,
+      mfaEnabled: true, mfaSecret: s.secret, mfaVerified: true,
+      active: true, loginAttempts: 0,
+      createdAt: new Date('2024-01-01'),
+      updatedAt: new Date('2024-01-01'),
     });
   }
 
-  revokeSessionsByFamily(tokenFamily: string): void {
-    this.sessions.forEach((s, id) => {
-      if (s.tokenFamily === tokenFamily) {
-        this.sessions.set(id, { ...s, revoked: true });
-      }
-    });
+  const incidentSeeds: Omit<Incident, 'id'>[] = [
+    { title: 'Tentativa de Breach em Blockchain', description: 'Atividade suspeita na camada Hyperledger Fabric', severity: 'critical', status: 'investigating', assignee: 'SOC Team Alpha', createdAt: new Date(Date.now() - 23*60000), updatedAt: new Date(Date.now()-5*60000), slaDeadline: new Date(Date.now()+2*3600000), tags: ['blockchain','breach'] },
+    { title: 'Anomalia em Transações PIX',        description: 'Volume 340% acima da média nas últimas 2h',        severity: 'high',     status: 'open',          assignee: 'PIX Security Team', createdAt: new Date(Date.now() - 60*60000), updatedAt: new Date(Date.now()-10*60000), slaDeadline: new Date(Date.now()+6*3600000), tags: ['pix','anomaly'] },
+    { title: 'Falha em HSM - Nível 3',            description: 'Hardware Security Module com erro de autenticação', severity: 'high',     status: 'contained',     assignee: 'Crypto Team',       createdAt: new Date(Date.now()-120*60000), updatedAt: new Date(Date.now()-30*60000), slaDeadline: new Date(Date.now()+4*3600000), tags: ['hsm','crypto'] },
+  ];
+
+  for (const i of incidentSeeds) {
+    incidents.insert({ id: uuidv4(), ...i });
   }
+
+  const anomalySeeds: Omit<PixAnomaly, 'id'>[] = [
+    { detectedAt: new Date(Date.now()-5*60000),  type: 'volume_spike', severity: 'high',   description: 'Pico de 340% nas transações PIX nas últimas 2h', affectedTransactions: 12847, status: 'investigating' },
+    { detectedAt: new Date(Date.now()-45*60000), type: 'geographic',   severity: 'medium', description: 'Concentração anômala de transações na região Sul',  affectedTransactions: 3421,  status: 'open' },
+  ];
+
+  for (const a of anomalySeeds) {
+    pixAnomalies.insert({ id: uuidv4(), ...a });
+  }
+
+  logger.info(`Database seeded: ${users.count()} users, ${incidents.count()} incidents`);
 }
-
-export const db = new Database();

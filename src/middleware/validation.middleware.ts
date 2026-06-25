@@ -13,24 +13,16 @@ export function validate(req: Request, res: Response, next: NextFunction): void 
 }
 
 export const loginValidators = [
-  body('email')
-    .isEmail().withMessage('Email inválido')
-    .normalizeEmail()
-    .trim(),
-  body('password')
-    .isLength({ min: 8 }).withMessage('Senha deve ter pelo menos 8 caracteres')
-    .trim(),
+  body('email').isEmail().withMessage('Email inválido').normalizeEmail().trim(),
+  body('password').isLength({ min: 8 }).withMessage('Senha deve ter pelo menos 8 caracteres').trim(),
 ];
 
 export const mfaValidators = [
-  body('userId')
-    .isUUID().withMessage('userId inválido'),
-  body('mfaToken')
-    .isLength({ min: 6, max: 6 }).withMessage('Código MFA deve ter 6 dígitos')
-    .isNumeric().withMessage('Código MFA deve conter apenas números'),
+  body('userId').isUUID().withMessage('userId inválido'),
+  body('mfaToken').isLength({ min: 6, max: 6 }).withMessage('Código MFA deve ter 6 dígitos').isNumeric().withMessage('Código MFA deve conter apenas números'),
 ];
 
+// refreshToken is optional in body — may come from httpOnly cookie instead
 export const refreshValidators = [
-  body('refreshToken')
-    .notEmpty().withMessage('refreshToken é obrigatório'),
+  body('refreshToken').optional().isString(),
 ];
