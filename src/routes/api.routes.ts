@@ -327,3 +327,96 @@ router.get('/dashboard/summary', (_req: Request, res: Response) => {
 });
 
 export default router;
+
+// ─────────────────────────────────────────
+// USERS — sessions (derived from sessions collection)
+// ─────────────────────────────────────────
+router.get('/users/sessions', requireRoles('Admin', 'Diretor'), (_req: Request, res: Response) => {
+  const allSessions = [...db.sessions.values()]
+    .filter(s => !s.revoked && new Date() < s.expiresAt)
+    .map(s => {
+      const user = db.findUserById(s.userId);
+      return {
+        id: s.id,
+        userId: s.userId,
+        userName: user?.name ?? 'Unknown',
+        userEmail: user?.email ?? '',
+        userRole: user?.role ?? '',
+        ip: s.ip ?? '—',
+        userAgent: s.userAgent ?? '—',
+        createdAt: s.createdAt,
+        expiresAt: s.expiresAt,
+        risk: s.ip?.startsWith('192.168') ? 'low' : 'medium',
+      };
+    });
+  sendSuccess(res, allSessions);
+});
+
+// ─────────────────────────────────────────
+// SECURITY — threat intelligence feed
+// ─────────────────────────────────────────
+router.get('/security/threats', authenticate, (_req: Request, res: Response) => {
+  sendSuccess(res, {
+    totalDetected: 1284,
+    totalBlocked: 1273,
+    blockRate: 99.1,
+    activeThreats: 3,
+    lastUpdated: new Date(),
+    recentThreats: [
+      { id: '1', type: 'DDoS Attempt',       severity: 'high',     source: '203.45.12.0/24', blockedAt: new Date(Date.now()-5*60000),   layer: 'Edge Protection',    blocked: true },
+      { id: '2', type: 'SQL Injection',       severity: 'high',     source: '185.234.9.45',  blockedAt: new Date(Date.now()-12*60000),  layer: 'Application Security', blocked: true },
+      { id: '3', type: 'Brute Force',         severity: 'medium',   source: '91.108.56.89',  blockedAt: new Date(Date.now()-23*60000),  layer: 'Identity & Access',  blocked: true },
+      { id: '4', type: 'Data Exfil Attempt',  severity: 'critical', source: '45.155.205.12', blockedAt: new Date(Date.now()-45*60000),  layer: 'Data Protection',    blocked: false },
+      { id: '5', type: 'Port Scan',           severity: 'low',      source: '198.12.34.56',  blockedAt: new Date(Date.now()-90*60000),  layer: 'Network Security',   blocked: true },
+    ],
+  });
+});
+
+// ─────────────────────────────────────────
+// PIX — real-time chart data (intraday)
+// ─────────────────────────────────────────
+router.get('/pix/chart', authenticate, (_req: Request, res: Response) => {
+  const now = new Date();
+  const hours = Array.from({ length: 24 }, (_, i) => {
+    const h = new Date(now);
+    h.setHours(i, 0, 0, 0);
+    const isPeak = i >= 8 && i <= 20;
+    const base = isPeak ? 350 : 90;
+    return {
+      time: `${String(i).padStart(2, '0')}:00`,
+      volume: Math.floor(base + Math.random() * base * 0.4),
+      value: Math.floor((base + Math.random() * base * 0.4) * 20000),
+    };
+  });
+  sendSuccess(res, hours);
+});
+
+// ─────────────────────────────────────────
+// EXECUTIVE — risk trends (30 days)
+// ─────────────────────────────────────────
+router.get('/executive/risk-trends', requireRoles('Admin', 'Diretor'), (_req: Request, res: Response) => {
+  const trends = Array.from({ length: 30 }, (_, i) => {
+    const d = new Date(Date.now() - (29 - i) * 86400000);
+    return {
+      date: d.toISOString().split('T')[0],
+      cybersecurity: Math.max(5, 20 - i * 0.4 + Math.random() * 4),
+      operational:   Math.max(10, 45 - i * 0.3 + Math.random() * 5),
+      compliance:    Math.max(3, 15 - i * 0.3 + Math.random() * 3),
+      financial:     Math.max(2, 10 - i * 0.2 + Math.random() * 2),
+    };
+  });
+  sendSuccess(res, trends);
+});
+
+// ─────────────────────────────────────────
+// EXECUTIVE — reports list
+// ─────────────────────────────────────────
+router.get('/executive/reports', requireRoles('Admin', 'Diretor', 'Auditor'), (_req: Request, res: Response) => {
+  sendSuccess(res, [
+    { id: '1', name: 'Relatório LGPD — Junho 2026',   type: 'LGPD',       status: 'ready',    generatedAt: new Date(Date.now()-2*86400000),  size: '2.4 MB', pages: 48 },
+    { id: '2', name: 'Compliance Summary Q2 2026',    type: 'Executive',  status: 'ready',    generatedAt: new Date(Date.now()-5*86400000),  size: '1.8 MB', pages: 32 },
+    { id: '3', name: 'BACEN 4893 — Evidências',       type: 'Regulatory', status: 'ready',    generatedAt: new Date(Date.now()-7*86400000),  size: '5.1 MB', pages: 96 },
+    { id: '4', name: 'PCI DSS Audit — Q2 2026',       type: 'PCI',        status: 'ready',    generatedAt: new Date(Date.now()-10*86400000), size: '3.2 MB', pages: 61 },
+    { id: '5', name: 'Relatório LGPD — Julho 2026',   type: 'LGPD',       status: 'pending',  generatedAt: null,                            size: null,     pages: null },
+  ]);
+});

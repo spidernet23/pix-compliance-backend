@@ -183,3 +183,35 @@ export interface Incident {
   slaDeadline: Date;
   tags: string[];
 }
+
+// ─── LGPD ─────────────────────────────────────────────────────
+export type LgpdRequestType = 'access' | 'rectification' | 'deletion' | 'portability' | 'revocation' | 'info';
+export type LgpdRequestStatus = 'pending' | 'in_review' | 'completed' | 'rejected';
+
+export interface LgpdRequest {
+  id: string;
+  type: LgpdRequestType;
+  status: LgpdRequestStatus;
+  titularName: string;
+  titularEmail: string;
+  titularDocument: string; // CPF (masked in logs)
+  description: string;
+  createdAt: Date;
+  updatedAt: Date;
+  slaDeadline: Date; // +15 days per LGPD Art. 18 §3
+  resolvedAt?: Date;
+  resolution?: string;
+  assignee?: string;
+}
+
+export interface ConsentRecord {
+  id: string;
+  titularEmail: string;
+  purpose: string;       // finalidade do tratamento
+  legalBasis: string;    // base legal (Art. 7 ou Art. 11)
+  granted: boolean;
+  grantedAt: Date;
+  revokedAt?: Date;
+  version: string;       // versão da política
+  ip?: string;
+}

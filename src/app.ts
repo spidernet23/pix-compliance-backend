@@ -9,6 +9,7 @@ import { logger } from './utils/logger';
 import { requestId } from './middleware/auth.middleware';
 import authRoutes from './routes/auth.routes';
 import apiRoutes from './routes/api.routes';
+import lgpdRoutes from './routes/lgpd.routes';
 import { sendError } from './utils/response';
 
 const app = express();
@@ -75,6 +76,7 @@ app.get('/health', (_req: Request, res: Response) => {
 // ─── Routes ────────────────────────────────────────────────
 app.use('/api/auth', authRoutes);
 app.use('/api',      apiRoutes);
+app.use('/api/lgpd', lgpdRoutes);
 
 // ─── 404 ───────────────────────────────────────────────────
 app.use((_req: Request, res: Response) => sendError(res, 404, 'Rota não encontrada'));

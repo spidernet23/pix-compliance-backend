@@ -125,3 +125,8 @@ export async function seedIfEmpty() {
 
   logger.info(`Database seeded: ${users.count()} users, ${incidents.count()} incidents`);
 }
+
+// LGPD collections
+import { LgpdRequest, ConsentRecord } from '../domain/types';
+export const lgpdRequests  = new Collection<LgpdRequest>('lgpd-requests');
+export const consentLog    = new Collection<ConsentRecord>('consent-log');
