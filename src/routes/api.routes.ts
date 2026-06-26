@@ -164,7 +164,7 @@ router.get('/incidents', (_req: Request, res: Response) => {
   const page = parseInt(String(_req.query['page'] ?? 1));
   const limit = parseInt(String(_req.query['limit'] ?? 20));
   const all = [...db.incidents.values()].sort(
-    (a, b) => b.createdAt.getTime() - a.createdAt.getTime()
+    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
   );
   const paginated = all.slice((page - 1) * limit, page * limit);
   sendPaginated(res, paginated, all.length, page, limit);
@@ -418,5 +418,72 @@ router.get('/executive/reports', requireRoles('Admin', 'Diretor', 'Auditor'), (_
     { id: '3', name: 'BACEN 4893 — Evidências',       type: 'Regulatory', status: 'ready',    generatedAt: new Date(Date.now()-7*86400000),  size: '5.1 MB', pages: 96 },
     { id: '4', name: 'PCI DSS Audit — Q2 2026',       type: 'PCI',        status: 'ready',    generatedAt: new Date(Date.now()-10*86400000), size: '3.2 MB', pages: 61 },
     { id: '5', name: 'Relatório LGPD — Julho 2026',   type: 'LGPD',       status: 'pending',  generatedAt: null,                            size: null,     pages: null },
+  ]);
+});
+
+// ─────────────────────────────────────────
+// SETTINGS — system configuration state
+// ─────────────────────────────────────────
+import { KVStore } from '../database/file-db';
+const settingsStore = new KVStore('system-settings');
+
+// Default settings
+const DEFAULT_SETTINGS = {
+  mfaRequired: true,
+  sessionTimeoutMin: 30,
+  ipWhitelisting: false,
+  auditLogging: true,
+  aiPoweredResponses: true,
+  predictiveAnalytics: true,
+  autoRemediation: false,
+  workflowOrchestration: true,
+  backupEnabled: true,
+  backupFrequencyHours: 24,
+  backupRetentionDays: 35,
+  logLevel: 'info',
+  corsOrigin: process.env['CORS_ORIGIN'] ?? 'http://localhost:8080',
+};
+
+router.get('/settings', requireRoles('Admin'), (_req: Request, res: Response) => {
+  const saved = settingsStore.get<typeof DEFAULT_SETTINGS>('current') ?? DEFAULT_SETTINGS;
+  sendSuccess(res, { ...DEFAULT_SETTINGS, ...saved, lastUpdated: new Date() });
+});
+
+router.patch('/settings', requireRoles('Admin'), (req: Request, res: Response) => {
+  const current = settingsStore.get<typeof DEFAULT_SETTINGS>('current') ?? DEFAULT_SETTINGS;
+  const updated = { ...current, ...req.body };
+  settingsStore.set('current', updated);
+  auditService.log({
+    userId: req.user!.sub, userEmail: req.user!.email,
+    action: 'CONFIG_UPDATED', resource: 'settings',
+    ip: req.ip, status: 'SUCCESS',
+    details: { changed: Object.keys(req.body) },
+  });
+  sendSuccess(res, updated, 'Configurações atualizadas');
+});
+
+// ─────────────────────────────────────────
+// AUTOMATION — playbook stats and AI insights
+// ─────────────────────────────────────────
+router.get('/automation/stats', authenticate, (_req: Request, res: Response) => {
+  const allIncidents = [...db.incidents.values()];
+  const resolved = allIncidents.filter(i => i.status === 'resolved' || i.status === 'closed');
+  sendSuccess(res, {
+    playbooksActive: 23,
+    timeSavedHoursWeek: 347,
+    mlInsightsActive: 4200,
+    avgResponseMin: 2.1,
+    automationRate: resolved.length > 0 ? Math.round(resolved.length / allIncidents.length * 100) : 78,
+    playbooksTriggeredToday: 12,
+    lastUpdated: new Date(),
+  });
+});
+
+router.get('/automation/insights', authenticate, (_req: Request, res: Response) => {
+  sendSuccess(res, [
+    { id: '1', type: 'anomaly',    severity: 'high',   title: 'Padrão de Acesso Anômalo',       description: 'Detectado 340% acima da média em transações PIX às 03:00', confidence: 94, action: 'Playbook anti-fraude ativado automaticamente', timestamp: new Date(Date.now()-5*60000) },
+    { id: '2', type: 'compliance', severity: 'medium', title: 'Desvio LGPD Detectado',           description: '3 processos de tratamento de dados sem base legal documentada', confidence: 87, action: 'Alerta enviado ao DPO', timestamp: new Date(Date.now()-23*60000) },
+    { id: '3', type: 'security',   severity: 'low',    title: 'Certificado TLS em Expiração',    description: 'Certificado api.pixcompliance.com expira em 14 dias', confidence: 100, action: 'Renovação automática agendada', timestamp: new Date(Date.now()-45*60000) },
+    { id: '4', type: 'risk',       severity: 'medium', title: 'Concentração de Risco Operacional', description: 'Dois analistas com acesso simultâneo ao mesmo cliente', confidence: 79, action: 'Revisão de acesso recomendada', timestamp: new Date(Date.now()-90*60000) },
   ]);
 });

@@ -6,7 +6,8 @@ import morgan from 'morgan';
 import cookieParser from 'cookie-parser';
 import { config } from './config/env';
 import { logger } from './utils/logger';
-import { requestId } from './middleware/auth.middleware';
+import { requestId, authenticate, requireRoles } from './middleware/auth.middleware';
+import { metricsMiddleware, metrics } from './middleware/metrics.middleware';
 import authRoutes from './routes/auth.routes';
 import apiRoutes from './routes/api.routes';
 import lgpdRoutes from './routes/lgpd.routes';
@@ -42,6 +43,7 @@ app.use(cors({
 
 // ─── Global rate limit ─────────────────────────────────────
 app.use(rateLimit({
+  skip: () => process.env['NODE_ENV'] === 'test',
   windowMs: config.RATE_LIMIT_WINDOW_MS,
   max: config.RATE_LIMIT_MAX,
   standardHeaders: true,
@@ -62,21 +64,37 @@ app.use(morgan('combined', {
   skip: (req: Request) => req.url === '/health',
 }));
 
+app.use(metricsMiddleware);
+
 // ─── Health ────────────────────────────────────────────────
 app.get('/health', (_req: Request, res: Response) => {
+  const uptimeSec = Math.floor(process.uptime());
+  const mem = process.memoryUsage();
   res.json({
     status: 'ok',
     service: config.APP_NAME,
     version: config.APP_VERSION,
     env: config.NODE_ENV,
     timestamp: new Date().toISOString(),
+    uptime: `${Math.floor(uptimeSec/3600)}h ${Math.floor((uptimeSec%3600)/60)}m`,
+    memory: {
+      heapUsedMB: Math.round(mem.heapUsed / 1048576),
+      heapTotalMB: Math.round(mem.heapTotal / 1048576),
+      rssMB: Math.round(mem.rss / 1048576),
+    },
+    requests: metrics.summary().totalRequests,
   });
+});
+
+// ─── Metrics ───────────────────────────────────────────────
+app.get('/metrics', authenticate, requireRoles('Admin'), (_req: Request, res: Response) => {
+  res.json({ ...metrics.summary(), generatedAt: new Date().toISOString() });
 });
 
 // ─── Routes ────────────────────────────────────────────────
 app.use('/api/auth', authRoutes);
-app.use('/api',      apiRoutes);
 app.use('/api/lgpd', lgpdRoutes);
+app.use('/api',      apiRoutes);
 
 // ─── 404 ───────────────────────────────────────────────────
 app.use((_req: Request, res: Response) => sendError(res, 404, 'Rota não encontrada'));

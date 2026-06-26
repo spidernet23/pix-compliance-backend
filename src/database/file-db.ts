@@ -16,7 +16,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 
-const DATA_DIR = path.resolve(process.cwd(), 'data');
+const DATA_DIR = path.resolve(process.cwd(), process.env['DATA_DIR'] ?? 'data');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
 function filePath(name: string) {

@@ -23,6 +23,7 @@ export function authenticate(req: Request, res: Response, next: NextFunction): v
   }
 
   const token = authHeader.substring(7);
+  if (!token) { sendError(res, 401, 'Token inválido'); return; }
 
   try {
     const payload = tokenService.verifyAccessToken(token);

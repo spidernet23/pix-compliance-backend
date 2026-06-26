@@ -30,5 +30,5 @@ if (!parsed.success) {
 }
 
 export const config = parsed.data;
-export const isDev  = config.NODE_ENV === 'development';
+export const isDev  = config.NODE_ENV === 'development' || config.NODE_ENV === 'test';
 export const isProd = config.NODE_ENV === 'production';

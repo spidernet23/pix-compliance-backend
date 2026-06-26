@@ -7,7 +7,9 @@
     "dev": "tsx watch src/server.ts",
     "start": "node dist/server.js",
     "build": "tsc",
-    "test": "echo \"No tests yet\""
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "keywords": [],
   "author": "",
@@ -46,7 +48,11 @@
   },
   "devDependencies": {
     "@types/morgan": "^1.9.10",
+    "@types/supertest": "^7.2.0",
+    "@vitest/coverage-v8": "^4.1.9",
     "nodemon": "^3.1.14",
-    "tsx": "^4.22.4"
+    "supertest": "^7.2.2",
+    "tsx": "^4.22.4",
+    "vitest": "^4.1.9"
   }
 }

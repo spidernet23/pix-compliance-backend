@@ -95,7 +95,7 @@ router.get('/requests', authenticate, requireRoles('Admin', 'Auditor', 'Diretor'
   const limit = Math.min(parseInt(String(req.query['limit'] ?? 20)), 100);
   const statusFilter = req.query['status'] as string | undefined;
 
-  let all = lgpdRequests.findAll().sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  let all = lgpdRequests.findAll().sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   if (statusFilter) all = all.filter(r => r.status === statusFilter);
 
   // Mask CPF in list response
@@ -182,12 +182,12 @@ router.get('/stats', authenticate, requireRoles('Admin', 'Auditor', 'Diretor'), 
     ),
     slaAtRisk: all.filter(r =>
       (r.status === 'pending' || r.status === 'in_review') &&
-      r.slaDeadline.getTime() - now < 3 * 24 * 3600 * 1000 // < 3 days remaining
+      new Date(r.slaDeadline).getTime() - now < 3 * 24 * 3600 * 1000 // < 3 days remaining
     ).length,
     avgResolutionDays: (() => {
       const resolved = all.filter(r => r.resolvedAt);
       if (!resolved.length) return null;
-      const avg = resolved.reduce((a, r) => a + (r.resolvedAt!.getTime() - r.createdAt.getTime()), 0) / resolved.length;
+      const avg = resolved.reduce((a, r) => a + (new Date(r.resolvedAt!).getTime() - new Date(r.createdAt).getTime()), 0) / resolved.length;
       return Math.round(avg / 86400000);
     })(),
     lastUpdated: new Date(),
@@ -228,3 +228,73 @@ router.post('/consent',
 );
 
 export default router;
+
+// ─── POST /api/lgpd/anpd-notification — Art. 48 breach notification ─
+router.post('/anpd-notification',
+  authenticate,
+  requireRoles('Admin', 'Diretor'),
+  body('incidentId').notEmpty(),
+  body('incidentDescription').trim().isLength({ min: 20 }),
+  body('affectedDataCategories').isArray({ min: 1 }),
+  body('estimatedAffectedCount').isInt({ min: 1 }),
+  body('mitigationMeasures').trim().isLength({ min: 10 }),
+  validate,
+  (req: Request, res: Response) => {
+    const {
+      incidentId, incidentDescription, affectedDataCategories,
+      estimatedAffectedCount, mitigationMeasures,
+    } = req.body as {
+      incidentId: string;
+      incidentDescription: string;
+      affectedDataCategories: string[];
+      estimatedAffectedCount: number;
+      mitigationMeasures: string;
+    };
+
+    const notification = {
+      id: uuidv4(),
+      type: 'ANPD_BREACH_NOTIFICATION',
+      createdAt: new Date(),
+      // Art. 48: notification must be within 72 hours of discovery
+      deadline72h: new Date(Date.now() + 72 * 3600 * 1000),
+      status: 'draft', // draft → submitted → acknowledged
+      incidentId,
+      incidentDescription,
+      affectedDataCategories,
+      estimatedAffectedCount,
+      mitigationMeasures,
+      responsibleController: 'Pix Compliance AaaS',
+      dpoContact: 'dpo@pixcompliance.com',
+      legalBasis: 'Art. 48 Lei 13.709/2018 (LGPD)',
+      regulatoryRef: 'Resolução CD/ANPD nº 2/2022',
+      // In production: this would POST to https://www.gov.br/anpd endpoint
+      submissionEndpoint: 'https://www.gov.br/anpd/pt-br/assuntos/incidentes-de-seguranca',
+      instructions: [
+        '1. Revisar o rascunho gerado neste registro',
+        '2. Complementar com evidências forenses',
+        '3. Submeter ao portal gov.br/anpd até o prazo de 72h',
+        '4. Registrar número de protocolo ANPD neste sistema',
+      ],
+    };
+
+    auditService.log({
+      userId: req.user!.sub,
+      userEmail: req.user!.email,
+      action: 'COMPLIANCE_VIOLATION',
+      resource: `lgpd/anpd-notification/${notification.id}`,
+      ip: req.ip,
+      status: 'WARNING',
+      details: {
+        notificationId: notification.id,
+        incidentId,
+        affectedCount: estimatedAffectedCount,
+        categories: affectedDataCategories,
+      },
+    });
+
+    sendSuccess(res, notification,
+      'Rascunho de notificação à ANPD gerado. Submeta ao portal gov.br/anpd em até 72h (Art. 48 LGPD).',
+      201
+    );
+  }
+);

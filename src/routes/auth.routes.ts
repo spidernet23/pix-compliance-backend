@@ -11,6 +11,7 @@ import { logger } from '../utils/logger';
 const router = Router();
 
 const authRateLimit = rateLimit({
+  skip: () => process.env['NODE_ENV'] === 'test',
   windowMs: config.RATE_LIMIT_WINDOW_MS,
   max: config.AUTH_RATE_LIMIT_MAX,
   message: { success: false, message: 'Muitas tentativas. Tente novamente em 15 minutos.' },
@@ -56,7 +57,7 @@ router.post('/mfa', authRateLimit, mfaValidators, validate, async (req: Request,
  */
 router.post('/refresh', refreshValidators, validate, async (req: Request, res: Response) => {
   const cookieToken = getRefreshFromCookie(req);
-  const bodyToken   = (req.body as { refreshToken?: string }).refreshToken;
+  const bodyToken   = (req.body as { refreshToken?: string } | undefined)?.refreshToken;
   const refreshToken = cookieToken ?? bodyToken;
 
   if (!refreshToken) { sendError(res, 401, 'Refresh token não fornecido'); return; }
@@ -80,7 +81,7 @@ router.post('/refresh', refreshValidators, validate, async (req: Request, res: R
  */
 router.post('/logout', authenticate, async (req: Request, res: Response) => {
   const cookieToken = getRefreshFromCookie(req);
-  const bodyToken   = (req.body as { refreshToken?: string }).refreshToken;
+  const bodyToken   = (req.body as { refreshToken?: string } | undefined)?.refreshToken;
   await authService.logout(req.user!.sub, cookieToken ?? bodyToken, req.ip);
   clearRefreshCookie(res);
   sendSuccess(res, null, 'Logout realizado com sucesso');
