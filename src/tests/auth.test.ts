@@ -88,7 +88,6 @@ describe('POST /api/auth/logout', () => {
     const { token } = await loginAs('roberto.silva@pixcompliance.com', 'Admin@2024!Secure');
     expect(token).toBeTruthy(); // guard
     const res = await request(app).post('/api/auth/logout').set('Authorization', `Bearer ${token}`);
-    if (res.status !== 200) console.error('LOGOUT BODY:', JSON.stringify(res.body));
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
   });

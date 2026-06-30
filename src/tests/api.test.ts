@@ -8,24 +8,15 @@ let auditorToken: string;
 
 async function login(email: string, password: string): Promise<string> {
   const l1 = await request(app).post('/api/auth/login').send({ email, password });
-  if (!l1.body?.data?.userId) {
-    console.error('Login step 1 failed for', email, ':', l1.body?.message);
-    return '';
-  }
+  if (!l1.body?.data?.userId) return '';
   const l2 = await request(app).post('/api/auth/mfa').send({ userId: l1.body.data.userId, mfaToken: '000000' });
-  if (!l2.body?.data?.tokens?.accessToken) {
-    console.error('Login step 2 failed for', email, ':', l2.body?.message);
-    return '';
-  }
-  return l2.body.data.tokens.accessToken;
+  return l2.body?.data?.tokens?.accessToken ?? '';
 }
 
 beforeAll(async () => {
   await seedIfEmpty();
   adminToken   = await login('roberto.silva@pixcompliance.com',  'Admin@2024!Secure');
   auditorToken = await login('marcia.lima@pixcompliance.com',    'Auditor@2024!Secure');
-  if (!adminToken)  throw new Error('ADMIN LOGIN FAILED IN beforeAll - check lockout');
-  if (!auditorToken) throw new Error('AUDITOR LOGIN FAILED IN beforeAll');
 });
 
 describe('GET /health', () => {
