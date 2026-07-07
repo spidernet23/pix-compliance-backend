@@ -7,6 +7,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { Incident, IncidentSeverity, IncidentStatus } from '../domain/types';
 import { KVStore } from '../database/file-db';
 import { realMeta, demoMeta, integrationStatus } from '../domain/data-source';
+import { getPixProvider } from '../integrations/bacen/provider-factory';
 
 const router = Router();
 
@@ -21,9 +22,10 @@ router.use(authenticate);
  */
 
 // ── INTEGRATIONS — honest connection status (REAL) ──
-router.get('/integrations/status', (_req: Request, res: Response) => {
-  sendSuccess(res, integrationStatus(), undefined, 200,
-    realMeta('Status real das integrações. Nenhuma fonte externa conectada nesta instância.'));
+router.get('/integrations/status', async (_req: Request, res: Response) => {
+  const status = await integrationStatus();
+  sendSuccess(res, status, undefined, 200,
+    realMeta('Status real das integrações, verificado ao vivo.'));
 });
 
 // ── COMPLIANCE (DEMO) ──
@@ -49,22 +51,45 @@ router.get('/compliance/overview', (_req: Request, res: Response) => {
   }, undefined, 200, demoMeta('business-metrics'));
 });
 
-// ── PIX MONITORING (DEMO — BACEN PIX API) ──
-router.get('/pix/metrics', (_req: Request, res: Response) => {
-  const jitter = () => (Math.random() - 0.5) * 0.02;
-  sendSuccess(res, {
-    timestamp: new Date(),
-    volumeTotal: 2.4e9 * (1 + jitter()),
-    transactionCount: Math.floor(847000 * (1 + jitter())),
-    fraudRate: Math.max(0, 0.02 + jitter() * 0.1),
-    availability: Math.min(100, 99.97 + jitter() * 0.01),
-    avgLatencyMs: Math.max(80, 120 + jitter() * 20),
-  }, undefined, 200, demoMeta('bacen-pix-api'));
+// ── PIX MONITORING (real if BACEN connected, else demo) ──
+router.get('/pix/metrics', async (_req: Request, res: Response) => {
+  const provider = getPixProvider();
+  const health = await provider.health();
+  const metrics = await provider.getMetrics();
+  const meta = health.connected
+    ? realMeta('Dados reais agregados da API PIX do BACEN.')
+    : demoMeta('bacen-pix-api');
+  sendSuccess(res, metrics, undefined, 200, meta);
 });
 
 router.get('/pix/anomalies', (_req: Request, res: Response) => {
   const anomalies = [...db.pixAnomalies.values()];
   sendPaginated(res, anomalies, anomalies.length, 1, 50, demoMeta('ml-fraud-engine'));
+});
+
+// ── PIX received transactions (real if connected) ──
+router.get('/pix/received', async (req: Request, res: Response) => {
+  const provider = getPixProvider();
+  const health = await provider.health();
+  const fim = req.query['fim'] ? String(req.query['fim']) : new Date().toISOString();
+  const inicio = req.query['inicio'] ? String(req.query['inicio']) : new Date(Date.now() - 24 * 3600_000).toISOString();
+  const page = parseInt(String(req.query['page'] ?? 0));
+
+  try {
+    const { transactions, total } = await provider.listReceived({ inicio, fim, page });
+    const meta = health.connected
+      ? realMeta('Transações PIX reais recebidas via API BACEN.')
+      : demoMeta('bacen-pix-api');
+    sendSuccess(res, { transactions, total }, undefined, 200, meta);
+  } catch (err) {
+    sendError(res, 502, `Falha ao consultar API PIX: ${err instanceof Error ? err.message : 'erro'}`);
+  }
+});
+
+// ── BACEN integration health (circuit breaker diagnostics) ──
+router.get('/integrations/bacen/health', requireRoles('Admin', 'Diretor'), async (_req: Request, res: Response) => {
+  const health = await getPixProvider().health();
+  sendSuccess(res, health, undefined, 200, realMeta('Diagnóstico real da conexão BACEN.'));
 });
 
 router.get('/pix/history', (_req: Request, res: Response) => {

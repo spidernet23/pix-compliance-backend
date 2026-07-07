@@ -126,12 +126,23 @@ export function demoMeta(integration: IntegrationId): DataMeta {
 }
 
 /** Returns the connection status of all integrations (for the Integrations page). */
-export function integrationStatus() {
+export async function integrationStatus() {
+  // BACEN PIX has a real connector; query its live health.
+  // Other integrations have no connector yet, so remain statically false.
+  const { getPixProvider } = await import('../integrations/bacen/provider-factory');
+  let bacenConnected = false;
+  try {
+    const health = await getPixProvider().health();
+    bacenConnected = health.connected;
+  } catch {
+    bacenConnected = false;
+  }
+
   return Object.values(INTEGRATIONS).map(i => ({
     id: i.id,
     name: i.name,
     description: i.description,
     provides: i.provides,
-    connected: i.connected,
+    connected: i.id === 'bacen-pix-api' ? bacenConnected : i.connected,
   }));
 }

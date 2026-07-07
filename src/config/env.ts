@@ -19,6 +19,21 @@ const envSchema = z.object({
   APP_VERSION: z.string().default('7.0.0'),
   COOKIE_SECRET: z.string().min(32, 'COOKIE_SECRET must be at least 32 characters'),
   COOKIE_SECURE: z.string().transform(v => v === 'true').default(false),
+
+  // ── BACEN PIX API integration (optional) ──
+  // When all required vars are present, the real connector activates.
+  // When absent, the platform uses the demo provider and reports the
+  // integration as "not connected".
+  BACEN_PIX_BASE_URL: z.string().optional(),
+  BACEN_PIX_TOKEN_URL: z.string().optional(),
+  BACEN_PIX_CLIENT_ID: z.string().optional(),
+  BACEN_PIX_CLIENT_SECRET: z.string().optional(),
+  BACEN_PIX_ISPB: z.string().optional(),
+  BACEN_PIX_SCOPE: z.string().optional(),
+  BACEN_PIX_CERT: z.string().optional(),
+  BACEN_PIX_KEY: z.string().optional(),
+  BACEN_PIX_CA: z.string().optional(),
+  BACEN_PIX_KEY_PASSPHRASE: z.string().optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);
