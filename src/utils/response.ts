@@ -1,16 +1,18 @@
 import { Response } from 'express';
-import { ApiResponse, PaginatedResponse } from '../domain/types';
+import { ApiResponse, PaginatedResponse, DataProvenance } from '../domain/types';
 
 export function sendSuccess<T>(
   res: Response,
   data: T,
   message?: string,
-  status = 200
+  status = 200,
+  meta?: DataProvenance
 ): void {
   const response: ApiResponse<T> = {
     success: true,
     data,
     message,
+    meta,
     timestamp: new Date().toISOString(),
     requestId: (res.req as { requestId?: string }).requestId ?? '',
   };
@@ -38,7 +40,8 @@ export function sendPaginated<T>(
   data: T[],
   total: number,
   page: number,
-  limit: number
+  limit: number,
+  meta?: DataProvenance
 ): void {
   const response: PaginatedResponse<T> = {
     success: true,
@@ -49,6 +52,7 @@ export function sendPaginated<T>(
       total,
       totalPages: Math.ceil(total / limit),
     },
+    meta,
     timestamp: new Date().toISOString(),
     requestId: (res.req as { requestId?: string }).requestId ?? '',
   };

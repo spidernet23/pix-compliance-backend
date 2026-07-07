@@ -107,11 +107,21 @@ export interface AuditEntry {
 // ─────────────────────────────────────────
 // API RESPONSES
 // ─────────────────────────────────────────
+export interface DataProvenance {
+  source: 'real' | 'demo';
+  integration?: string;
+  integrationName?: string;
+  connected?: boolean;
+  note?: string;
+}
+
 export interface ApiResponse<T = unknown> {
   success: boolean;
   data?: T;
   message?: string;
   errors?: string[];
+  /** Data provenance: declares whether `data` is real or demonstrative. */
+  meta?: DataProvenance;
   timestamp: string;
   requestId: string;
 }
