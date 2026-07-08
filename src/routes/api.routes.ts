@@ -8,6 +8,9 @@ import { Incident, IncidentSeverity, IncidentStatus } from '../domain/types';
 import { KVStore } from '../database/file-db';
 import { realMeta, demoMeta, integrationStatus } from '../domain/data-source';
 import { getPixProvider } from '../integrations/bacen/provider-factory';
+import {
+  getFraudProvider, getSiemProvider, getBusinessProvider, getTxDbProvider,
+} from '../integrations/registry';
 
 const router = Router();
 
@@ -62,9 +65,12 @@ router.get('/pix/metrics', async (_req: Request, res: Response) => {
   sendSuccess(res, metrics, undefined, 200, meta);
 });
 
-router.get('/pix/anomalies', (_req: Request, res: Response) => {
-  const anomalies = [...db.pixAnomalies.values()];
-  sendPaginated(res, anomalies, anomalies.length, 1, 50, demoMeta('ml-fraud-engine'));
+router.get('/pix/anomalies', async (_req: Request, res: Response) => {
+  const fraud = getFraudProvider();
+  const health = await fraud.health();
+  const anomalies = await fraud.listAnomalies();
+  const meta = health.connected ? realMeta('Anomalias reais do motor de fraude.') : demoMeta('ml-fraud-engine');
+  sendPaginated(res, anomalies, anomalies.length, 1, 50, meta);
 });
 
 // ── PIX received transactions (real if connected) ──
@@ -92,12 +98,12 @@ router.get('/integrations/bacen/health', requireRoles('Admin', 'Diretor'), async
   sendSuccess(res, health, undefined, 200, realMeta('Diagnóstico real da conexão BACEN.'));
 });
 
-router.get('/pix/history', (_req: Request, res: Response) => {
-  const history = Array.from({ length: 30 }, (_, i) => {
-    const date = new Date(Date.now() - (29 - i) * 86400000);
-    return { date: date.toISOString().split('T')[0], volume: 2.0e9 + Math.random() * 0.8e9, transactions: 700000 + Math.floor(Math.random() * 200000), fraudRate: 0.01 + Math.random() * 0.02, availability: 99.9 + Math.random() * 0.1 };
-  });
-  sendSuccess(res, history, undefined, 200, demoMeta('bacen-pix-api'));
+router.get('/pix/history', async (_req: Request, res: Response) => {
+  const txdb = getTxDbProvider();
+  const health = await txdb.health();
+  const history = await txdb.getHistory(30);
+  const meta = health.connected ? realMeta('Histórico real da base de transações.') : demoMeta('transaction-db');
+  sendSuccess(res, history, undefined, 200, meta);
 });
 
 router.get('/pix/chart', (_req: Request, res: Response) => {
@@ -110,45 +116,49 @@ router.get('/pix/chart', (_req: Request, res: Response) => {
   sendSuccess(res, hours, undefined, 200, demoMeta('bacen-pix-api'));
 });
 
-// ── SECURITY CENTER (DEMO — SIEM/WAF/HSM) ──
-router.get('/security/layers', (_req: Request, res: Response) => {
-  const layers = [
-    { layer: 1, name: 'Edge Protection',        health: 98.5, threatsDetected: 247, threatsBlocked: 245, services: ['WAF', 'DDoS Protection', 'CDN Security'] },
-    { layer: 2, name: 'Network Security',       health: 97.2, threatsDetected: 156, threatsBlocked: 154, services: ['Firewall', 'IPS/IDS', 'Network Segmentation'] },
-    { layer: 3, name: 'Application Security',    health: 96.8, threatsDetected: 89,  threatsBlocked: 87,  services: ['Code Analysis', 'OWASP Protection', 'API Security'] },
-    { layer: 4, name: 'Identity & Access',       health: 99.1, threatsDetected: 78,  threatsBlocked: 78,  services: ['MFA', 'RBAC', 'Zero Trust'] },
-    { layer: 5, name: 'Data Protection',         health: 98.9, threatsDetected: 23,  threatsBlocked: 23,  services: ['AES-256', 'DLP', 'HSM'] },
-    { layer: 6, name: 'Endpoint Security',       health: 97.5, threatsDetected: 134, threatsBlocked: 131, services: ['EDR', 'Antivirus', 'Device Control'] },
-    { layer: 7, name: 'Monitoring & SIEM',       health: 98.2, threatsDetected: 456, threatsBlocked: 452, services: ['SIEM', 'Log Analysis', 'Threat Detection'] },
-    { layer: 8, name: 'AI/ML Security',          health: 94.7, threatsDetected: 89,  threatsBlocked: 85,  services: ['Behavioral Analysis', 'ML Threat Prediction'] },
-    { layer: 9, name: 'Compliance & Governance', health: 96.3, threatsDetected: 12,  threatsBlocked: 12,  services: ['Audit', 'Policy Enforcement', 'Risk Management'] },
-  ];
-  sendSuccess(res, {
-    layers, overallHealth: 97.6,
-    totalThreatsDetected: layers.reduce((a, l) => a + l.threatsDetected, 0),
-    totalThreatsBlocked:  layers.reduce((a, l) => a + l.threatsBlocked, 0),
-    blockRate: 99.2, lastUpdated: new Date(),
-  }, undefined, 200, demoMeta('siem'));
+// ── SECURITY CENTER (real if SIEM connected, else demo) ──
+router.get('/security/layers', async (_req: Request, res: Response) => {
+  const siem = getSiemProvider();
+  const health = await siem.health();
+  const snapshot = await siem.getSecuritySnapshot();
+  const meta = health.connected ? realMeta('Dados reais do SIEM.') : demoMeta('siem');
+  sendSuccess(res, snapshot, undefined, 200, meta);
 });
 
-router.get('/security/kpis', (_req: Request, res: Response) => {
+router.get('/security/kpis', async (_req: Request, res: Response) => {
+  const biz = getBusinessProvider();
+  const fraud = getFraudProvider();
+  const [bizHealth, kpis, stats] = await Promise.all([biz.health(), biz.getKpis(), fraud.getStats()]);
+  const meta = bizHealth.connected ? realMeta('KPIs reais das métricas de negócio.') : demoMeta('business-metrics');
   sendSuccess(res, {
-    revenueProtected: 847e6, complianceScore: 98.7, activeUsers: 2.4e6,
-    riskIncidents: 3, roi: 347, mttr: 2.8, falsePositiveRate: 1.8, lastUpdated: new Date(),
-  }, undefined, 200, demoMeta('business-metrics'));
+    revenueProtected: kpis.revenueProtected,
+    complianceScore: kpis.complianceScore,
+    activeUsers: kpis.activeUsers,
+    riskIncidents: 3,
+    roi: kpis.securityRoi,
+    mttr: kpis.mttrMinutes,
+    falsePositiveRate: stats.falsePositiveRate,
+    lastUpdated: new Date(),
+  }, undefined, 200, meta);
 });
 
-router.get('/security/threats', (_req: Request, res: Response) => {
+router.get('/security/threats', async (_req: Request, res: Response) => {
+  const siem = getSiemProvider();
+  const health = await siem.health();
+  const threats = await siem.listThreats();
+  const meta = health.connected ? realMeta('Ameaças reais do SIEM.') : demoMeta('siem');
+  const blocked = threats.filter(t => t.blocked).length;
   sendSuccess(res, {
-    totalDetected: 1284, totalBlocked: 1273, blockRate: 99.1, activeThreats: 3, lastUpdated: new Date(),
-    recentThreats: [
-      { id: '1', type: 'DDoS Attempt',       severity: 'high',     source: '203.45.12.0/24', blockedAt: new Date(Date.now()-5*60000),  layer: 'Edge Protection',     blocked: true },
-      { id: '2', type: 'SQL Injection',      severity: 'high',     source: '185.234.9.45',   blockedAt: new Date(Date.now()-12*60000), layer: 'Application Security', blocked: true },
-      { id: '3', type: 'Brute Force',        severity: 'medium',   source: '91.108.56.89',   blockedAt: new Date(Date.now()-23*60000), layer: 'Identity & Access',   blocked: true },
-      { id: '4', type: 'Data Exfil Attempt', severity: 'critical', source: '45.155.205.12',  blockedAt: new Date(Date.now()-45*60000), layer: 'Data Protection',     blocked: false },
-      { id: '5', type: 'Port Scan',          severity: 'low',      source: '198.12.34.56',   blockedAt: new Date(Date.now()-90*60000), layer: 'Network Security',    blocked: true },
-    ],
-  }, undefined, 200, demoMeta('siem'));
+    totalDetected: threats.length,
+    totalBlocked: blocked,
+    blockRate: threats.length ? Math.round(blocked / threats.length * 1000) / 10 : 100,
+    activeThreats: threats.filter(t => !t.blocked).length,
+    lastUpdated: new Date(),
+    recentThreats: threats.map(t => ({
+      id: t.id, type: t.type, severity: t.severity, source: t.source,
+      blockedAt: t.detectedAt, layer: t.layer, blocked: t.blocked,
+    })),
+  }, undefined, 200, meta);
 });
 
 // ── INCIDENTS (REAL — persisted, audit-logged) ──
@@ -222,25 +232,29 @@ router.get('/users/sessions', requireRoles('Admin', 'Diretor'), (_req: Request, 
   sendSuccess(res, allSessions, undefined, 200, realMeta('Sessões reais ativas no sistema.'));
 });
 
-// ── EXECUTIVE (DEMO) ──
-router.get('/executive/kpis', requireRoles('Admin', 'Diretor'), (_req: Request, res: Response) => {
+// ── EXECUTIVE (real if business-metrics connected, else demo) ──
+router.get('/executive/kpis', requireRoles('Admin', 'Diretor'), async (_req: Request, res: Response) => {
+  const biz = getBusinessProvider();
+  const health = await biz.health();
+  const k = await biz.getKpis();
+  const meta = health.connected ? realMeta('KPIs executivos reais.') : demoMeta('business-metrics');
   sendSuccess(res, {
-    revenueProtected:  { value: 847e6,   trend: '+12%',  label: 'Receita Protegida' },
-    complianceScore:   { value: 98.7,    trend: '+1.2%', label: 'Score Compliance' },
-    activeUsers:       { value: 2400000, trend: '+5.3%', label: 'Usuários Ativos' },
-    securityROI:       { value: 347,     trend: '+23%',  label: 'ROI Segurança (%)' },
-    incidentsResolved: { value: 99.2,    trend: '+0.8%', label: 'Incidentes Resolvidos (%)' },
-    mttr:              { value: 2.8,     trend: '-30s',  label: 'MTTR (min)' },
+    revenueProtected:  { value: k.revenueProtected, trend: '+12%',  label: 'Receita Protegida' },
+    complianceScore:   { value: k.complianceScore,  trend: '+1.2%', label: 'Score Compliance' },
+    activeUsers:       { value: k.activeUsers,      trend: '+5.3%', label: 'Usuários Ativos' },
+    securityROI:       { value: k.securityRoi,      trend: '+23%',  label: 'ROI Segurança (%)' },
+    incidentsResolved: { value: k.incidentsResolvedPct, trend: '+0.8%', label: 'Incidentes Resolvidos (%)' },
+    mttr:              { value: k.mttrMinutes,      trend: '-30s',  label: 'MTTR (min)' },
     lastUpdated: new Date(),
-  }, undefined, 200, demoMeta('business-metrics'));
+  }, undefined, 200, meta);
 });
 
-router.get('/executive/risk-trends', requireRoles('Admin', 'Diretor'), (_req: Request, res: Response) => {
-  const trends = Array.from({ length: 30 }, (_, i) => {
-    const d = new Date(Date.now() - (29 - i) * 86400000);
-    return { date: d.toISOString().split('T')[0], cybersecurity: Math.max(5, 20 - i * 0.4 + Math.random() * 4), operational: Math.max(10, 45 - i * 0.3 + Math.random() * 5), compliance: Math.max(3, 15 - i * 0.3 + Math.random() * 3), financial: Math.max(2, 10 - i * 0.2 + Math.random() * 2) };
-  });
-  sendSuccess(res, trends, undefined, 200, demoMeta('business-metrics'));
+router.get('/executive/risk-trends', requireRoles('Admin', 'Diretor'), async (_req: Request, res: Response) => {
+  const biz = getBusinessProvider();
+  const health = await biz.health();
+  const trends = await biz.getRiskTrends(30);
+  const meta = health.connected ? realMeta('Tendências de risco reais.') : demoMeta('business-metrics');
+  sendSuccess(res, trends, undefined, 200, meta);
 });
 
 router.get('/executive/reports', requireRoles('Admin', 'Diretor', 'Auditor'), (_req: Request, res: Response) => {
@@ -286,14 +300,20 @@ router.patch('/settings', requireRoles('Admin'), (req: Request, res: Response) =
 });
 
 // ── AUTOMATION (DEMO) ──
-router.get('/automation/stats', (_req: Request, res: Response) => {
+router.get('/automation/stats', async (_req: Request, res: Response) => {
   const allIncidents = [...db.incidents.values()];
   const resolved = allIncidents.filter(i => i.status === 'resolved' || i.status === 'closed');
+  const fraud = getFraudProvider();
+  const health = await fraud.health();
+  const stats = await fraud.getStats();
+  const meta = health.connected ? realMeta('Estatísticas reais do motor de fraude.') : demoMeta('ml-fraud-engine');
   sendSuccess(res, {
-    playbooksActive: 23, timeSavedHoursWeek: 347, mlInsightsActive: 4200, avgResponseMin: 2.1,
+    playbooksActive: 23, timeSavedHoursWeek: 347,
+    mlInsightsActive: stats.transactionsScored,
+    avgResponseMin: 2.1,
     automationRate: resolved.length > 0 ? Math.round(resolved.length / allIncidents.length * 100) : 78,
     playbooksTriggeredToday: 12, lastUpdated: new Date(),
-  }, undefined, 200, demoMeta('siem'));
+  }, undefined, 200, meta);
 });
 
 router.get('/automation/insights', (_req: Request, res: Response) => {
