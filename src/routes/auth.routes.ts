@@ -5,6 +5,7 @@ import { authenticate } from '../middleware/auth.middleware';
 import { validate, loginValidators, mfaValidators, refreshValidators } from '../middleware/validation.middleware';
 import { sendSuccess, sendError } from '../utils/response';
 import { setRefreshCookie, clearRefreshCookie, getRefreshFromCookie } from '../utils/cookies';
+import { issueCsrfToken, clearCsrfToken } from '../security/csrf';
 import { config } from '../config/env';
 import { logger } from '../utils/logger';
 
@@ -43,11 +44,13 @@ router.post('/mfa', authRateLimit, mfaValidators, validate, async (req: Request,
 
   // Refresh token → httpOnly cookie; access token → body
   setRefreshCookie(res, result.tokens!.refreshToken);
+  const csrfToken = issueCsrfToken(res); // anti-CSRF double-submit token
   logger.info('User logged in', { userId, ip: req.ip });
 
   sendSuccess(res, {
     tokens: { accessToken: result.tokens!.accessToken, expiresIn: result.tokens!.expiresIn },
     user: result.user,
+    csrfToken,
   }, 'Login realizado com sucesso');
 });
 
@@ -65,9 +68,11 @@ router.post('/refresh', refreshValidators, validate, async (req: Request, res: R
   try {
     const result = await authService.refreshTokens(refreshToken, req.ip, req.headers['user-agent']);
     setRefreshCookie(res, result.refreshToken);
+    const csrfToken = issueCsrfToken(res);
     sendSuccess(res, {
       tokens: { accessToken: result.accessToken, expiresIn: result.expiresIn },
       user: result.user,
+      csrfToken,
     }, 'Tokens renovados');
   } catch (err: unknown) {
     clearRefreshCookie(res);
@@ -84,6 +89,7 @@ router.post('/logout', authenticate, async (req: Request, res: Response) => {
   const bodyToken   = (req.body as { refreshToken?: string } | undefined)?.refreshToken;
   await authService.logout(req.user!.sub, cookieToken ?? bodyToken, req.ip);
   clearRefreshCookie(res);
+  clearCsrfToken(res);
   sendSuccess(res, null, 'Logout realizado com sucesso');
 });
 

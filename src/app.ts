@@ -12,25 +12,50 @@ import authRoutes from './routes/auth.routes';
 import apiRoutes from './routes/api.routes';
 import lgpdRoutes from './routes/lgpd.routes';
 import { sendError } from './utils/response';
+import { hardenPayload, sanitizeStrings } from './security/input-hardening';
+import { csrfProtection } from './security/csrf';
 
 const app = express();
 
 // ─── Security headers ──────────────────────────────────────
+app.disable('x-powered-by'); // don't advertise Express
+
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
-      defaultSrc: ["'self'"],
-      scriptSrc:  ["'self'"],
-      styleSrc:   ["'self'"],
-      imgSrc:     ["'self'", 'data:'],
+      defaultSrc:  ["'self'"],
+      scriptSrc:   ["'self'"],
+      styleSrc:    ["'self'", "'unsafe-inline'"], // Tailwind runtime styles
+      imgSrc:      ["'self'", 'data:', 'https:'],
+      connectSrc:  ["'self'"],
+      fontSrc:     ["'self'"],
+      objectSrc:   ["'none'"],
+      frameSrc:    ["'none'"],
+      frameAncestors: ["'none'"],
+      baseUri:     ["'self'"],
+      formAction:  ["'self'"],
+      upgradeInsecureRequests: config.COOKIE_SECURE ? [] : null,
     },
   },
   hsts: config.COOKIE_SECURE
-    ? { maxAge: 31536000, includeSubDomains: true }
-    : false, // only enforce HSTS in prod (requires HTTPS)
+    ? { maxAge: 63072000, includeSubDomains: true, preload: true }
+    : false,
   noSniff:    true,
   frameguard: { action: 'deny' },
+  referrerPolicy: { policy: 'no-referrer' },
+  crossOriginOpenerPolicy: { policy: 'same-origin' },
+  crossOriginResourcePolicy: { policy: 'same-origin' },
+  hidePoweredBy: true,
+  dnsPrefetchControl: { allow: false },
+  ieNoOpen: true,
+  permittedCrossDomainPolicies: { permittedPolicies: 'none' },
 }));
+
+// Permissions-Policy: deny powerful features the app doesn't use.
+app.use((_req: Request, res: Response, next: NextFunction) => {
+  res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(), camera=(), payment=(), usb=(), interest-cohort=()');
+  next();
+});
 
 // ─── CORS ──────────────────────────────────────────────────
 app.use(cors({
@@ -53,10 +78,25 @@ app.use(rateLimit({
 }));
 
 // ─── Parsing ───────────────────────────────────────────────
-app.use(express.json({ limit: '10kb' }));
-app.use(express.urlencoded({ extended: true }));
+// The reviver rejects prototype-pollution keys during parse itself,
+// before they can reach any object graph.
+const DANGEROUS_KEYS = ['__proto__', 'constructor', 'prototype'];
+app.use(express.json({
+  limit: '10kb',
+  reviver: (key, value) => {
+    if (DANGEROUS_KEYS.includes(key)) {
+      throw Object.assign(new Error('forbidden key'), { type: 'entity.parse.failed' });
+    }
+    return value;
+  },
+}));
+app.use(express.urlencoded({ extended: false, limit: '10kb' }));
 app.use(cookieParser(config.COOKIE_SECRET)); // enables req.cookies
 app.use(requestId);
+
+// ─── Input hardening (post-parse, pre-handler) ─────────────
+app.use(hardenPayload);   // reject prototype-pollution / nesting bombs
+app.use(sanitizeStrings); // strip null bytes / control chars
 
 // ─── Logging ───────────────────────────────────────────────
 app.use(morgan('combined', {
@@ -93,14 +133,23 @@ app.get('/metrics', authenticate, requireRoles('Admin'), (_req: Request, res: Re
 
 // ─── Routes ────────────────────────────────────────────────
 app.use('/api/auth', authRoutes);
-app.use('/api/lgpd', lgpdRoutes);
-app.use('/api',      apiRoutes);
+app.use('/api/lgpd', csrfProtection, lgpdRoutes);
+app.use('/api',      csrfProtection, apiRoutes);
 
 // ─── 404 ───────────────────────────────────────────────────
 app.use((_req: Request, res: Response) => sendError(res, 404, 'Rota não encontrada'));
 
 // ─── Global error handler ──────────────────────────────────
-app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
+app.use((err: Error & { type?: string; status?: number }, _req: Request, res: Response, _next: NextFunction) => {
+  // Body-parser errors: payload too large, malformed JSON.
+  if (err.type === 'entity.too.large') {
+    sendError(res, 413, 'Payload excede o tamanho máximo permitido');
+    return;
+  }
+  if (err.type === 'entity.parse.failed') {
+    sendError(res, 400, 'JSON malformado');
+    return;
+  }
   logger.error('Unhandled error', { message: err.message, stack: err.stack });
   sendError(res, 500, 'Erro interno do servidor');
 });
